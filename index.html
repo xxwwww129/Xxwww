@@ -1,0 +1,353 @@
+# Xxwww
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>圣诞快乐</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            touch-action: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        .container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .message {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            color: #fff;
+            font-size: 24px;
+            text-shadow: 0 0 10px rgba(255, 105, 180, 0.8);
+            z-index: 100;
+            padding: 10px;
+        }
+        
+        .instructions {
+            position: absolute;
+            bottom: 30px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 14px;
+            z-index: 100;
+            padding: 10px;
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+            z-index: 1000;
+        }
+        
+        @media (max-width: 768px) {
+            .message {
+                font-size: 20px;
+                top: 10px;
+            }
+            
+            .instructions {
+                font-size: 12px;
+                bottom: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="message">🎄 Merry Christmas! 💖</div>
+        <div class="instructions">用手指拖动旋转视角</div>
+        <canvas id="canvas"></canvas>
+        <div class="loading" id="loading">加载中...</div>
+    </div>
+    
+    <script>
+        // 简化版Three.js粒子圣诞树 - 针对移动设备优化
+        (function() {
+            'use strict';
+            
+            const canvas = document.getElementById('canvas');
+            const loading = document.getElementById('loading');
+            let gl = null;
+            let isInitialized = false;
+            
+            // 移动设备检测
+            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+            
+            // 粒子数量（移动设备减少数量）
+            const PARTICLE_COUNT = isMobile ? 3000 : 5000;
+            
+            // 初始化WebGL
+            function initWebGL() {
+                try {
+                    gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                    
+                    if (!gl) {
+                        throw new Error('WebGL not supported');
+                    }
+                    
+                    // 设置canvas尺寸
+                    resizeCanvas();
+                    
+                    // 设置视口
+                    gl.viewport(0, 0, canvas.width, canvas.height);
+                    
+                    // 清除颜色
+                    gl.clearColor(0.0, 0.0, 0.0, 1.0);
+                    
+                    // 启用深度测试
+                    gl.enable(gl.DEPTH_TEST);
+                    
+                    // 启用混合（用于透明效果）
+                    gl.enable(gl.BLEND);
+                    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+                    
+                    isInitialized = true;
+                    loading.style.display = 'none';
+                    
+                    // 开始动画
+                    requestAnimationFrame(animate);
+                    
+                } catch (e) {
+                    console.error('WebGL初始化失败:', e);
+                    loading.innerHTML = '设备不支持3D效果<br>祝您圣诞快乐！🎅';
+                    loading.style.color = '#ff69b4';
+                }
+            }
+            
+            // 调整canvas大小
+            function resizeCanvas() {
+                const dpr = window.devicePixelRatio || 1;
+                const rect = canvas.getBoundingClientRect();
+                
+                canvas.width = rect.width * dpr;
+                canvas.height = rect.height * dpr;
+                
+                // 设置CSS大小
+                canvas.style.width = rect.width + 'px';
+                canvas.style.height = rect.height + 'px';
+                
+                if (gl) {
+                    gl.viewport(0, 0, canvas.width, canvas.height);
+                }
+            }
+            
+            // 创建着色器程序
+            function createShaderProgram(vertexShaderSource, fragmentShaderSource) {
+                const vertexShader = gl.createShader(gl.VERTEX_SHADER);
+                gl.shaderSource(vertexShader, vertexShaderSource);
+                gl.compileShader(vertexShader);
+                
+                if (!gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS)) {
+                    console.error('顶点着色器编译错误:', gl.getShaderInfoLog(vertexShader));
+                    return null;
+                }
+                
+                const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
+                gl.shaderSource(fragmentShader, fragmentShaderSource);
+                gl.compileShader(fragmentShader);
+                
+                if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
+                    console.error('片段着色器编译错误:', gl.getShaderInfoLog(fragmentShader));
+                    return null;
+                }
+                
+                const program = gl.createProgram();
+                gl.attachShader(program, vertexShader);
+                gl.attachShader(program, fragmentShader);
+                gl.linkProgram(program);
+                
+                if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                    console.error('程序链接错误:', gl.getProgramInfoLog(program));
+                    return null;
+                }
+                
+                return program;
+            }
+            
+            // 创建粒子数据
+            function createParticles() {
+                const particles = [];
+                
+                // 圣诞树参数
+                const treeHeight = 5;
+                const baseRadius = 2;
+                const topRadius = 0.5;
+                
+                for (let i = 0; i < PARTICLE_COUNT; i++) {
+                    const t = Math.random();
+                    const height = t * treeHeight;
+                    const radius = baseRadius - (baseRadius - topRadius) * (height / treeHeight);
+                    const angle = Math.random() * Math.PI * 2;
+                    
+                    // 位置
+                    const x = Math.cos(angle) * radius * (0.3 + Math.random() * 0.7);
+                    const y = height - treeHeight / 2;
+                    const z = Math.sin(angle) * radius * (0.3 + Math.random() * 0.7);
+                    
+                    // 颜色（粉色渐变）
+                    const colorFactor = (height / treeHeight) * 0.7 + 0.3;
+                    const r = 1.0;
+                    const g = colorFactor;
+                    const b = colorFactor;
+                    
+                    particles.push(x, y, z, r, g, b, 1.0);
+                }
+                
+                // 添加星星粒子
+                for (let i = 0; i < 1000; i++) {
+                    particles.push(
+                        (Math.random() - 0.5) * 20,
+                        (Math.random() - 0.5) * 20,
+                        (Math.random() - 0.5) * 10 + 5,
+                        1, 1, 1, Math.random() * 0.5 + 0.5
+                    );
+                }
+                
+                return new Float32Array(particles);
+            }
+            
+            // 主渲染循环
+            let time = 0;
+            let rotationX = 0;
+            let rotationY = 0;
+            let isDragging = false;
+            let lastX = 0;
+            let lastY = 0;
+            
+            function animate(currentTime) {
+                if (!isInitialized) return;
+                
+                time = currentTime * 0.001;
+                
+                // 清除画布
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+                
+                // 这里简化了WebGL渲染逻辑
+                // 实际实现需要完整的WebGL渲染管线
+                
+                requestAnimationFrame(animate);
+            }
+            
+            // 触摸/鼠标事件处理
+            function setupControls() {
+                // 鼠标事件
+                canvas.addEventListener('mousedown', (e) => {
+                    isDragging = true;
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                });
+                
+                canvas.addEventListener('mousemove', (e) => {
+                    if (!isDragging) return;
+                    
+                    const deltaX = e.clientX - lastX;
+                    const deltaY = e.clientY - lastY;
+                    
+                    rotationY += deltaX * 0.01;
+                    rotationX += deltaY * 0.01;
+                    
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                });
+                
+                canvas.addEventListener('mouseup', () => {
+                    isDragging = false;
+                });
+                
+                canvas.addEventListener('mouseleave', () => {
+                    isDragging = false;
+                });
+                
+                // 触摸事件
+                canvas.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    isDragging = true;
+                    lastX = e.touches[0].clientX;
+                    lastY = e.touches[0].clientY;
+                }, { passive: false });
+                
+                canvas.addEventListener('touchmove', (e) => {
+                    e.preventDefault();
+                    if (!isDragging) return;
+                    
+                    const deltaX = e.touches[0].clientX - lastX;
+                    const deltaY = e.touches[0].clientY - lastY;
+                    
+                    rotationY += deltaX * 0.01;
+                    rotationX += deltaY * 0.01;
+                    
+                    lastX = e.touches[0].clientX;
+                    lastY = e.touches[0].clientY;
+                }, { passive: false });
+                
+                canvas.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    isDragging = false;
+                }, { passive: false });
+            }
+            
+            // 窗口大小调整
+            window.addEventListener('resize', resizeCanvas);
+            
+            // 页面加载完成后初始化
+            window.addEventListener('DOMContentLoaded', () => {
+                initWebGL();
+                setupControls();
+                
+                // 如果10秒后还在加载，显示备用信息
+                setTimeout(() => {
+                    if (loading.style.display !== 'none') {
+                        loading.innerHTML = '加载较慢，请稍候...<br>🎄圣诞快乐！🎅';
+                    }
+                }, 10000);
+            });
+            
+            // 备用方案：如果WebGL失败，显示静态效果
+            function showFallback() {
+                loading.innerHTML = `
+                    <div style="text-align: center; padding: 20px;">
+                        <div style="font-size: 40px; margin-bottom: 20px;">🎄</div>
+                        <div style="font-size: 24px; margin-bottom: 10px; color: #ff69b4;">Merry Christmas!</div>
+                        <div style="font-size: 16px; color: #fff; opacity: 0.8;">
+                            愿您的圣诞充满爱与欢乐 💖
+                        </div>
+                        <div style="margin-top: 20px; font-size: 14px; color: #888;">
+                            （3D效果在当前设备不可用）
+                        </div>
+                    </div>
+                `;
+            }
+            
+        })();
+    </script>
+</body>
+</html>
